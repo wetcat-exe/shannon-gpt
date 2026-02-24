@@ -110,8 +110,8 @@ Shannon is available in two editions:
 
 ```bash
 # 1. Clone Shannon
-git clone https://github.com/KeygraphHQ/shannon.git
-cd shannon
+git clone https://github.com/wetcat-exe/shannon-gpt.git
+cd shannon-gpt
 
 # 2. Configure credentials
 
