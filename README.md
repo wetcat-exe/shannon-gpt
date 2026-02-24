@@ -87,7 +87,7 @@ Shannon is available in two editions:
   - [Usage Examples](#usage-examples)
   - [Workspaces and Resuming](#workspaces-and-resuming)
   - [Configuration (Optional)](#configuration-optional)
-  - [[EXPERIMENTAL - UNSUPPORTED] Router Mode (Alternative Providers)](#experimental---unsupported-router-mode-alternative-providers)
+  - [Model Configuration](#model-configuration)
   - [Output and Results](#output-and-results)
 - [Sample Reports](#-sample-reports)
 - [Architecture](#️-architecture)
@@ -104,10 +104,7 @@ Shannon is available in two editions:
 ### Prerequisites
 
 - **Docker** - Container runtime ([Install Docker](https://docs.docker.com/get-docker/))
-- **AI Provider Credentials** (choose one):
-  - **Anthropic API key** (recommended) - Get from [Anthropic Console](https://console.anthropic.com)
-  - **Claude Code OAuth token**
-  - **[EXPERIMENTAL - UNSUPPORTED] Alternative providers via Router Mode** - OpenAI or Google Gemini via OpenRouter (see [Router Mode](#experimental---unsupported-router-mode-alternative-providers))
+- **OpenAI API key** - Get from [OpenAI Platform](https://platform.openai.com/api-keys)
 
 ### Quick Start
 
@@ -116,16 +113,18 @@ Shannon is available in two editions:
 git clone https://github.com/KeygraphHQ/shannon.git
 cd shannon
 
-# 2. Configure credentials (choose one method)
+# 2. Configure credentials
 
 # Option A: Export environment variables
-export ANTHROPIC_API_KEY="your-api-key"              # or CLAUDE_CODE_OAUTH_TOKEN
-export CLAUDE_CODE_MAX_OUTPUT_TOKENS=64000           # recommended
+export OPENAI_API_KEY="your-api-key"
+export OPENAI_MODEL="gpt-4.1"                        # optional
+export OPENAI_MAX_OUTPUT_TOKENS=64000                 # optional
 
 # Option B: Create a .env file
 cat > .env << 'EOF'
-ANTHROPIC_API_KEY=your-api-key
-CLAUDE_CODE_MAX_OUTPUT_TOKENS=64000
+OPENAI_API_KEY=your-api-key
+OPENAI_MODEL=gpt-4.1
+OPENAI_MAX_OUTPUT_TOKENS=64000
 EOF
 
 # 3. Run a pentest
@@ -336,9 +335,9 @@ rules:
 
 If your application uses two-factor authentication, simply add the TOTP secret to your config file. The AI will automatically generate the required codes during testing.
 
-#### Subscription Plan Rate Limits
+#### API Rate Limits
 
-Anthropic subscription plans reset usage on a **rolling 5-hour window**. The default retry strategy (30-min max backoff) will exhaust retries before the window resets. Add this to your config:
+If you hit provider rate limits, reduce pipeline concurrency and increase retry resilience:
 
 ```yaml
 pipeline:
@@ -348,42 +347,19 @@ pipeline:
 
 `max_concurrent_pipelines` controls how many vulnerability pipelines run simultaneously (1-5, default: 5). Lower values reduce the chance of hitting rate limits but increase wall-clock time.
 
-### [EXPERIMENTAL - UNSUPPORTED] Router Mode (Alternative Providers)
+### Model Configuration
 
-Shannon can experimentally route requests through alternative AI providers using claude-code-router. This mode is not officially supported and is intended primarily for:
+Shannon runs directly against OpenAI Chat Completions.
 
-* **Model experimentation** — try Shannon with GPT-5.2 or Gemini 3–family models
-
-#### Quick Setup
-
-1. Add your provider API key to `.env`:
+Set the following in your shell or `.env`:
 
 ```bash
-# Choose one provider:
 OPENAI_API_KEY=sk-...
-# OR
-OPENROUTER_API_KEY=sk-or-...
-
-# Set default model:
-ROUTER_DEFAULT=openai,gpt-5.2  # provider,model format
+OPENAI_MODEL=gpt-4.1
+OPENAI_MAX_OUTPUT_TOKENS=64000
 ```
 
-2. Run with `ROUTER=true`:
-
-```bash
-./shannon start URL=https://example.com REPO=repo-name ROUTER=true
-```
-
-#### Experimental Models
-
-| Provider | Models |
-|----------|--------|
-| OpenAI | gpt-5.2, gpt-5-mini |
-| OpenRouter | google/gemini-3-flash-preview |
-
-#### Disclaimer
-
-This feature is experimental and unsupported. Output quality depends heavily on the model. Shannon is built on top of the Anthropic Agent SDK and is optimized and primarily tested with Anthropic Claude models. Alternative providers may produce inconsistent results (including failing early phases like Recon) depending on the model and routing setup.
+If `OPENAI_MODEL` is omitted, Shannon defaults to `gpt-4.1`.
 
 ### Output and Results
 
@@ -496,7 +472,7 @@ Shannon emulates a human penetration tester's methodology using a sophisticated 
 
 ### Architectural Overview
 
-Shannon is engineered to emulate the methodology of a human penetration tester. It leverages Anthropic's Claude Agent SDK as its core reasoning engine, but its true strength lies in the sophisticated multi-agent architecture built around it. This architecture combines the deep context of **white-box source code analysis** with the real-world validation of **black-box dynamic exploitation**, managed by an orchestrator through four distinct phases to ensure a focus on minimal false positives and intelligent context management.
+Shannon is engineered to emulate the methodology of a human penetration tester. It uses OpenAI models as its core reasoning engine, but its true strength lies in the sophisticated multi-agent architecture built around it. This architecture combines the deep context of **white-box source code analysis** with the real-world validation of **black-box dynamic exploitation**, managed by an orchestrator through four distinct phases to ensure a focus on minimal false positives and intelligent context management.
 
 ---
 
@@ -563,7 +539,7 @@ Shannon is designed for legitimate security auditing purposes only.
 #### **5. Cost & Performance**
 
 - **Time**: As of the current version, a full test run typically takes **1 to 1.5 hours** to complete.
-- **Cost**: Running the full test using Anthropic's Claude 4.5 Sonnet model may incur costs of approximately **$50 USD**. Costs vary based on model pricing and application complexity.
+- **Cost**: Running a full test may incur meaningful LLM usage costs. Total spend depends on the selected OpenAI model, token usage, and application complexity.
 
 #### **6. Windows Antivirus False Positives**
 
