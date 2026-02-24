@@ -1,20 +1,14 @@
-> [!NOTE]
-> **[Shannon Lite achieves a 96.15% success rate on a hint-free, source-aware XBOW benchmark. &rarr;](https://github.com/KeygraphHQ/shannon/tree/main/xben-benchmark-results/README.md)**
 
-
-<div align="center">
-
-<a href="https://trendshift.io/repositories/15604" target="_blank"><img src="https://trendshift.io/api/badge/repositories/15604" alt="KeygraphHQ%2Fshannon | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
-
-<img src="./assets/github-banner.png" alt="Shannon — AI Penetration Testing Framework" width="100%">
 
 # Shannon is your fully autonomous AI pentester.
 
 Shannon’s job is simple: break your web app before anyone else does. <br />
 The Red Team to your vibe-coding Blue team. <br />
 Every Claude (coder) deserves their Shannon.
+But we updated it so it runs on chatgpt api's too.
 
 ---
+credits go to original creators at
 
 [Website](https://keygraph.io) • [Discord](https://discord.gg/KAqzSHHpRt)
 
