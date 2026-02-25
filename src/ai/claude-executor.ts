@@ -7,23 +7,16 @@
 // Production Claude agent execution with retry, git checkpoints, and audit logging
 
 import { fs, path } from 'zx';
-import { query } from '@anthropic-ai/claude-agent-sdk';
 
 import { isRetryableError, PentestError } from '../services/error-handling.js';
 import { isSpendingCapBehavior } from '../utils/billing-detection.js';
 import { Timer } from '../utils/metrics.js';
 import { formatTimestamp } from '../utils/formatting.js';
-import { AGENT_VALIDATORS, MCP_AGENT_MAPPING } from '../session-manager.js';
+import { AGENT_VALIDATORS } from '../session-manager.js';
 import { AuditSession } from '../audit/index.js';
-import { createShannonHelperServer } from '../../mcp-server/dist/index.js';
-import { AGENTS } from '../session-manager.js';
-import type { AgentName } from '../types/index.js';
-
-import { dispatchMessage } from './message-handlers.js';
 import { detectExecutionContext, formatErrorOutput, formatCompletionMessage } from './output-formatters.js';
 import { createProgressManager } from './progress-manager.js';
 import { createAuditLogger } from './audit-logger.js';
-import { getActualModelName } from './router-utils.js';
 import type { ActivityLogger } from '../types/activity-logger.js';
 
 declare global {
@@ -43,73 +36,6 @@ export interface ClaudePromptResult {
   errorType?: string | undefined;
   prompt?: string | undefined;
   retryable?: boolean | undefined;
-}
-
-interface StdioMcpServer {
-  type: 'stdio';
-  command: string;
-  args: string[];
-  env: Record<string, string>;
-}
-
-type McpServer = ReturnType<typeof createShannonHelperServer> | StdioMcpServer;
-
-// Configures MCP servers for agent execution, with Docker-specific Chromium handling
-function buildMcpServers(
-  sourceDir: string,
-  agentName: string | null,
-  logger: ActivityLogger
-): Record<string, McpServer> {
-  // 1. Create the shannon-helper server (always present)
-  const shannonHelperServer = createShannonHelperServer(sourceDir);
-
-  const mcpServers: Record<string, McpServer> = {
-    'shannon-helper': shannonHelperServer,
-  };
-
-  // 2. Look up the agent's Playwright MCP mapping
-  if (agentName) {
-    const promptTemplate = AGENTS[agentName as AgentName].promptTemplate;
-    const playwrightMcpName = MCP_AGENT_MAPPING[promptTemplate as keyof typeof MCP_AGENT_MAPPING] || null;
-
-    if (playwrightMcpName) {
-      logger.info(`Assigned ${agentName} -> ${playwrightMcpName}`);
-
-      const userDataDir = `/tmp/${playwrightMcpName}`;
-
-      // 3. Configure Playwright MCP args with Docker/local browser handling
-      const isDocker = process.env.SHANNON_DOCKER === 'true';
-
-      const mcpArgs: string[] = [
-        '@playwright/mcp@latest',
-        '--isolated',
-        '--user-data-dir', userDataDir,
-      ];
-
-      if (isDocker) {
-        mcpArgs.push('--executable-path', '/usr/bin/chromium-browser');
-        mcpArgs.push('--browser', 'chromium');
-      }
-
-      const envVars: Record<string, string> = Object.fromEntries(
-        Object.entries({
-          ...process.env,
-          PLAYWRIGHT_HEADLESS: 'true',
-          ...(isDocker && { PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1' }),
-        }).filter((entry): entry is [string, string] => entry[1] !== undefined)
-      );
-
-      mcpServers[playwrightMcpName] = {
-        type: 'stdio' as const,
-        command: 'npx',
-        args: mcpArgs,
-        env: envVars,
-      };
-    }
-  }
-
-  // 4. Return configured servers
-  return mcpServers;
 }
 
 function outputLines(lines: string[]): void {
@@ -200,7 +126,7 @@ export async function runClaudePrompt(
   sourceDir: string,
   context: string = '',
   description: string = 'Claude analysis',
-  agentName: string | null = null,
+  _agentName: string | null = null,
   auditSession: AuditSession | null = null,
   logger: ActivityLogger
 ): Promise<ClaudePromptResult> {
@@ -218,39 +144,23 @@ export async function runClaudePrompt(
 
   logger.info(`Running Claude Code: ${description}...`);
 
-  // 3. Configure MCP servers
-  const mcpServers = buildMcpServers(sourceDir, agentName, logger);
 
-  // 4. Build env vars to pass to SDK subprocesses
-  const sdkEnv: Record<string, string> = {
-    CLAUDE_CODE_MAX_OUTPUT_TOKENS: process.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS || '64000',
-  };
-  if (process.env.ANTHROPIC_API_KEY) {
-    sdkEnv.ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
-  }
-  if (process.env.CLAUDE_CODE_OAUTH_TOKEN) {
-    sdkEnv.CLAUDE_CODE_OAUTH_TOKEN = process.env.CLAUDE_CODE_OAUTH_TOKEN;
-  }
-  if (process.env.ANTHROPIC_BASE_URL) {
-    sdkEnv.ANTHROPIC_BASE_URL = process.env.ANTHROPIC_BASE_URL;
-  }
-  if (process.env.ANTHROPIC_AUTH_TOKEN) {
-    sdkEnv.ANTHROPIC_AUTH_TOKEN = process.env.ANTHROPIC_AUTH_TOKEN;
+  if (!process.env.OPENAI_API_KEY) {
+    throw new PentestError(
+      'OPENAI_API_KEY is not set. Configure OpenAI credentials before running agents.',
+      'config',
+      false
+    );
   }
 
-  // 5. Configure SDK options
+  // 3. Configure OpenAI client options
   const options = {
-    model: 'claude-sonnet-4-5-20250929',
-    maxTurns: 10_000,
-    cwd: sourceDir,
-    permissionMode: 'bypassPermissions' as const,
-    allowDangerouslySkipPermissions: true,
-    mcpServers,
-    env: sdkEnv,
+    model: process.env.OPENAI_MODEL || 'gpt-4.1',
+    maxOutputTokens: Number(process.env.OPENAI_MAX_OUTPUT_TOKENS || '64000'),
   };
 
   if (!execContext.useCleanOutput) {
-    logger.info(`SDK Options: maxTurns=${options.maxTurns}, cwd=${sourceDir}, permissions=BYPASS`);
+    logger.info(`OpenAI Options: model=${options.model}, cwd=${sourceDir}`);
   }
 
   let turnCount = 0;
@@ -261,7 +171,7 @@ export async function runClaudePrompt(
   progress.start();
 
   try {
-    // 6. Process the message stream
+    // 4. Process prompt with ChatGPT API
     const messageLoopResult = await processMessageStream(
       fullPrompt,
       options,
@@ -348,59 +258,55 @@ interface MessageLoopDeps {
 
 async function processMessageStream(
   fullPrompt: string,
-  options: NonNullable<Parameters<typeof query>[0]['options']>,
+  options: { model: string; maxOutputTokens: number },
   deps: MessageLoopDeps,
   timer: Timer
 ): Promise<MessageLoopResult> {
-  const { execContext, description, progress, auditLogger, logger } = deps;
+  const { description, auditLogger, logger } = deps;
   const HEARTBEAT_INTERVAL = 30000;
 
   let turnCount = 0;
   let result: string | null = null;
   let apiErrorDetected = false;
   let cost = 0;
-  let model: string | undefined;
+  let model: string | undefined = options.model;
   let lastHeartbeat = Date.now();
 
-  for await (const message of query({ prompt: fullPrompt, options })) {
-    // Heartbeat logging when loader is disabled
-    const now = Date.now();
-    if (global.SHANNON_DISABLE_LOADER && now - lastHeartbeat > HEARTBEAT_INTERVAL) {
-      logger.info(`[${Math.floor((now - timer.startTime) / 1000)}s] ${description} running... (Turn ${turnCount})`);
-      lastHeartbeat = now;
-    }
-
-    // Increment turn count for assistant messages
-    if (message.type === 'assistant') {
-      turnCount++;
-    }
-
-    const dispatchResult = await dispatchMessage(
-      message as { type: string; subtype?: string },
-      turnCount,
-      { execContext, description, progress, auditLogger, logger }
-    );
-
-    if (dispatchResult.type === 'throw') {
-      throw dispatchResult.error;
-    }
-
-    if (dispatchResult.type === 'complete') {
-      result = dispatchResult.result;
-      cost = dispatchResult.cost;
-      break;
-    }
-
-    if (dispatchResult.type === 'continue') {
-      if (dispatchResult.apiErrorDetected) {
-        apiErrorDetected = true;
-      }
-      // Capture model from SystemInitMessage, but override with router model if applicable
-      if (dispatchResult.model) {
-        model = getActualModelName(dispatchResult.model);
-      }
-    }
+  const now = Date.now();
+  if (global.SHANNON_DISABLE_LOADER && now - lastHeartbeat > HEARTBEAT_INTERVAL) {
+    logger.info(`[${Math.floor((now - timer.startTime) / 1000)}s] ${description} running...`);
+    lastHeartbeat = now;
   }
+
+  const response = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${process.env.OPENAI_API_KEY || ''}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: options.model,
+      messages: [{ role: 'user', content: fullPrompt }],
+      max_completion_tokens: options.maxOutputTokens,
+    }),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`OpenAI API error (${response.status}): ${errorText}`);
+  }
+
+  const completion = await response.json() as {
+    model?: string;
+    usage?: { total_tokens?: number };
+    choices?: Array<{ message?: { content?: string | null } }>;
+  };
+
+  turnCount = 1;
+  result = completion.choices?.[0]?.message?.content ?? '';
+  model = completion.model || options.model;
+  cost = 0;
+  await auditLogger.logLlmResponse(turnCount, result);
 
   return { turnCount, result, apiErrorDetected, cost, model };
 }
