@@ -123,6 +123,9 @@ EOF
 
 # 3. Run a pentest
 ./shannon start URL=https://your-app.com REPO=your-repo
+
+# Black-box mode (no local repo required)
+./shannon start URL=https://your-app.com --bb
 ```
 
 Shannon will build the containers, start the workflow, and return a workflow ID. The pentest runs in the background.
@@ -161,6 +164,7 @@ open http://localhost:8233
 
 # Custom output directory
 ./shannon start URL=https://example.com REPO=repo-name OUTPUT=./my-reports
+./shannon start URL=https://example.com --bb
 
 # Named workspace
 ./shannon start URL=https://example.com REPO=repo-name WORKSPACE=q1-audit
@@ -198,7 +202,10 @@ Shannon supports **workspaces** that allow you to resume interrupted or failed r
 
 ### Prepare Your Repository
 
-Shannon expects target repositories to be placed under the `./repos/` directory at the project root. The `REPO` flag refers to a folder name inside `./repos/`. Copy the repository you want to scan into `./repos/`, or clone it directly there:
+Shannon expects target repositories to be placed under the `./repos/` directory at the project root for standard white-box runs. The `REPO` flag refers to a folder name inside `./repos/`. Copy the repository you want to scan into `./repos/`, or clone it directly there:
+
+> [!TIP]
+> To run in black-box mode without providing a repo, use `--bb`. Shannon will auto-create a minimal workspace repo under `./repos/` for deliverables/checkpoints.
 
 ```bash
 git clone https://github.com/your-org/your-repo.git ./repos/your-repo

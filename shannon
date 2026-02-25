@@ -40,7 +40,8 @@ show_help() {
            AI Penetration Testing Framework
 
 Usage:
-  ./shannon start URL=<url> REPO=<name>   Start a pentest workflow
+  ./shannon start URL=<url> REPO=<name>   Start a white-box pentest workflow
+  ./shannon start URL=<url> --bb          Start a black-box pentest workflow
   ./shannon workspaces                    List all workspaces
   ./shannon logs ID=<workflow-id>         Tail logs for a specific workflow
   ./shannon stop                          Stop all containers
@@ -48,6 +49,7 @@ Usage:
 
 Options for 'start':
   REPO=<name>            Folder name under ./repos/ (e.g. REPO=repo-name)
+  --bb                   Enable black-box mode (auto-creates a minimal repo workspace)
   CONFIG=<path>          Configuration file (YAML)
   OUTPUT=<path>          Output directory for reports (default: ./audit-logs/)
   WORKSPACE=<name>       Named workspace (auto-resumes if exists, creates if new)
@@ -59,6 +61,7 @@ Options for 'stop':
 
 Examples:
   ./shannon start URL=https://example.com REPO=repo-name
+  ./shannon start URL=https://example.com --bb
   ./shannon start URL=https://example.com REPO=repo-name WORKSPACE=q1-audit
   ./shannon start URL=https://example.com REPO=repo-name CONFIG=./config.yaml
   ./shannon start URL=https://example.com REPO=repo-name OUTPUT=./my-reports
@@ -84,8 +87,46 @@ parse_args() {
       REBUILD=*) REBUILD="${arg#REBUILD=}" ;;
       ROUTER=*) ROUTER="${arg#ROUTER=}" ;;
       WORKSPACE=*) WORKSPACE="${arg#WORKSPACE=}" ;;
+      BB=true|--bb|-bb) BB="true" ;;
     esac
   done
+}
+
+
+setup_blackbox_repo() {
+  local url="$1"
+
+  mkdir -p ./repos
+
+  local host
+  host=$(echo "$url" | sed -E 's#^[a-zA-Z]+://##; s#/.*$##; s#[^a-zA-Z0-9._-]#-#g')
+  [ -z "$host" ] && host="target"
+
+  local repo_name="blackbox-${host}"
+  local repo_dir="./repos/${repo_name}"
+
+  mkdir -p "$repo_dir"
+
+  if [ ! -d "$repo_dir/.git" ]; then
+    git -C "$repo_dir" init >/dev/null 2>&1
+    git -C "$repo_dir" config user.email "shannon-blackbox@local"
+    git -C "$repo_dir" config user.name "Shannon Blackbox"
+
+    cat > "$repo_dir/BLACKBOX_MODE.md" << EOF
+# Shannon Black-box Workspace
+
+This repository was auto-created by \`./shannon start --bb\`.
+
+Target URL: ${url}
+
+No source code is required in this mode. Shannon will rely on runtime interaction and AI-driven exploration against the target URL.
+EOF
+
+    git -C "$repo_dir" add BLACKBOX_MODE.md
+    git -C "$repo_dir" commit -m "Initialize black-box workspace" >/dev/null 2>&1
+  fi
+
+  echo "$repo_name"
 }
 
 # Check if Temporal is running and healthy
@@ -136,22 +177,30 @@ cmd_start() {
   parse_args "$@"
 
   # Validate required vars
-  if [ -z "$URL" ] || [ -z "$REPO" ]; then
-    echo "ERROR: URL and REPO are required"
+  if [ -z "$URL" ]; then
+    echo "ERROR: URL is required"
     echo "Usage: ./shannon start URL=<url> REPO=<name>"
+    echo "   or: ./shannon start URL=<url> --bb"
     exit 1
   fi
 
-  # Check for API key (router mode can use alternative provider API keys)
-  if [ -z "$ANTHROPIC_API_KEY" ] && [ -z "$CLAUDE_CODE_OAUTH_TOKEN" ]; then
-    if [ "$ROUTER" = "true" ] && { [ -n "$OPENAI_API_KEY" ] || [ -n "$OPENROUTER_API_KEY" ]; }; then
-      # Router mode with alternative provider - set a placeholder for SDK init
-      export ANTHROPIC_API_KEY="router-mode"
-    else
-      echo "ERROR: Set ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN in .env"
-      echo "       (or use ROUTER=true with OPENAI_API_KEY or OPENROUTER_API_KEY)"
-      exit 1
-    fi
+  # Black-box mode: auto-provision a minimal git workspace when REPO is omitted
+  if [ "$BB" = "true" ] && [ -z "$REPO" ]; then
+    REPO=$(setup_blackbox_repo "$URL")
+    echo "Black-box mode enabled (--bb). Using auto workspace: ./repos/$REPO"
+  fi
+
+  if [ -z "$REPO" ]; then
+    echo "ERROR: REPO is required unless --bb is specified"
+    echo "Usage: ./shannon start URL=<url> REPO=<name>"
+    echo "   or: ./shannon start URL=<url> --bb"
+    exit 1
+  fi
+
+  # Check for OpenAI API key
+  if [ -z "$OPENAI_API_KEY" ]; then
+    echo "ERROR: Set OPENAI_API_KEY in .env"
+    exit 1
   fi
 
   # Determine container path for REPO
